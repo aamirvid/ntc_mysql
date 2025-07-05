@@ -1,0 +1,37 @@
+/* src/components/MemoSectionGlass.css */
+
+.memo-glass-form {
+  background: var(--card-bg);
+  border-radius: 16px;
+  box-shadow: 0 2px 18px 0 rgba(19,173,199,0.09);
+  border: var(--glass-border);
+  backdrop-filter: blur(12px);
+  transition: background 0.3s, color 0.3s;
+  color: #232c3d;
+  padding: 38px 32px 32px 32px;
+  /* Removed max-width and margin */
+}
+
+body.dark .memo-glass-form {
+  background: var(--card-bg-dark);
+  border: 1.5px solid rgba(19,173,199,0.19);
+  color: #f4f9fb;
+}
+
+.memo-form-title {
+  font-size: 1.24rem;
+  font-weight: 700;
+  margin-bottom: 18px;
+  background: var(--accent-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  color: transparent;
+}
+
+@media (max-width: 700px) {
+  .memo-glass-form {
+    padding: 10px 4vw;
+    border-radius: 12px;
+  }
+}

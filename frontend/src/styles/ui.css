@@ -1,0 +1,61 @@
+:root {
+  --accent-gradient: linear-gradient(90deg, #13adc7 0%, #5efce8 100%);
+  --card-bg: rgba(255,255,255,0.75);
+  --card-bg-dark: rgba(22,30,38,0.95);
+  --glass-border: 1.5px solid rgba(19,173,199,0.14);
+}
+
+html, body {
+  background: #f4f9fb;
+  font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+}
+
+body.dark {
+  background: #101820;
+}
+
+.glass-title {
+  background: var(--accent-gradient);
+  -webkit-background-clip: text;
+  background-clip: text; 
+  -webkit-text-fill-color: transparent;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  font-size: 1.5rem;
+  margin-bottom: 8px;
+}
+
+/* Soft neumorphic input */
+.glass-input .MuiOutlinedInput-root {
+  border-radius: 12px !important;
+  background: rgba(255,255,255,0.54) !important;
+  box-shadow: 0 1px 4px rgba(19,173,199,0.03);
+  font-weight: 500;
+  transition: background 0.18s, border 0.18s;
+}
+body.dark .glass-input .MuiOutlinedInput-root {
+  background: rgba(22,30,38,0.78) !important;
+}
+
+.glass-input .MuiOutlinedInput-root.Mui-focused,
+.glass-input .MuiOutlinedInput-root:hover {
+  background: rgba(255,255,255,0.85) !important;
+  border-color: #13adc7 !important;
+}
+body.dark .glass-input .MuiOutlinedInput-root.Mui-focused,
+body.dark .glass-input .MuiOutlinedInput-root:hover {
+  background: rgba(22,30,38,0.97) !important;
+  border-color: #5efce8 !important;
+}
+
+.accent-btn {
+  background: var(--accent-gradient) !important;
+  color: #fff !important;
+  border: none !important;
+  box-shadow: 0 2px 12px 0 rgba(19,173,199,0.13) !important;
+  font-weight: 700 !important;
+}
+
+.accent-btn:hover {
+  filter: brightness(1.05);
+}

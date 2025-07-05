@@ -1,0 +1,36 @@
+/* src/components/SubmittedLrsTable.css */
+.glass-table {
+  background: var(--card-bg);
+  border-radius: 20px;
+  box-shadow: 0 2px 18px 0 rgba(19,173,199,0.09);
+  border: var(--glass-border);
+  backdrop-filter: blur(12px);
+  transition: background 0.3s, color 0.3s;
+  color: #232c3d;
+  padding: 18px;
+  margin-top: 24px;
+  overflow-x: auto;
+}
+
+body.dark .glass-table {
+  background: var(--card-bg-dark);
+  border: 1.5px solid rgba(19,173,199,0.19);
+  color: #eafcff;
+}
+
+.glass-table th {
+  background: transparent;
+  font-weight: 700;
+  color: #13adc7;
+  border-bottom: 2px solid #13adc7;
+}
+
+body.dark .glass-table th {
+  color: #38ef7d;
+  border-bottom: 2px solid #38ef7d;
+}
+
+.glass-table td, .glass-table th {
+  padding: 10px 18px;
+  text-align: left;
+}
