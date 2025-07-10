@@ -8,11 +8,6 @@ function getFinancialYearSuffix(date = new Date()) {
   return m >= 4 ? y : y - 1;
 }
 
-/**
- * Creates all tables for a given financial year if not exists.
- * Also ensures suggestion tables are present (these are NOT year-specific).
- * @param {number} [year]
- */
 async function ensureTables(year) {
   const FY = year || getFinancialYearSuffix();
   const pool = mysql.createPool({
@@ -25,7 +20,7 @@ async function ensureTables(year) {
     queueLimit: 0
   });
 
-  // Memo table for the FY
+  // MEMO Table
   await pool.query(`
     CREATE TABLE IF NOT EXISTS memo_${FY} (
       id                 INT PRIMARY KEY AUTO_INCREMENT,
@@ -42,10 +37,10 @@ async function ensureTables(year) {
       created_by         VARCHAR(100),
       updated_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       updated_by         VARCHAR(100)
-    )
+    ) ENGINE=InnoDB
   `);
 
-  // LR table for the FY
+  // LR Table
   await pool.query(`
     CREATE TABLE IF NOT EXISTS lr_${FY} (
       id              INT PRIMARY KEY AUTO_INCREMENT,
@@ -75,10 +70,12 @@ async function ensureTables(year) {
       updated_by      VARCHAR(100),
       updated_at      DATETIME,
       FOREIGN KEY(memo_id) REFERENCES memo_${FY}(id)
-    )
+        ON DELETE CASCADE
+        ON UPDATE CASCADE
+    ) ENGINE=InnoDB
   `);
 
-  // Cash memo table for the FY
+  // CASH MEMO Table — UNIQUE & Foreign Key constraints, bulletproof!
   await pool.query(`
     CREATE TABLE IF NOT EXISTS cash_memo_${FY} (
       id              INT PRIMARY KEY AUTO_INCREMENT,
@@ -94,37 +91,73 @@ async function ensureTables(year) {
       updated_by      VARCHAR(100),
       updated_at      DATETIME,
       FOREIGN KEY(lr_id) REFERENCES lr_${FY}(id)
-    )
+        ON DELETE CASCADE
+        ON UPDATE CASCADE
+    ) ENGINE=InnoDB
   `);
 
-  // Suggestion tables (shared for all years)
+  // Sequence table for cash memo numbers
+await pool.query(`
+  CREATE TABLE IF NOT EXISTS cash_memo_sequence_${FY} (
+    id INT PRIMARY KEY NOT NULL DEFAULT 1,
+    last_no INT NOT NULL
+  ) ENGINE=InnoDB
+`);
+
+// Initialize the sequence table for this year if not present
+const [seqRows] = await pool.query(
+  `SELECT last_no FROM cash_memo_sequence_${FY} WHERE id=1`
+);
+if (!seqRows[0]) {
+  // If empty, initialize with the current max cash_memo_no in case of migration from old system
+  const [maxRows] = await pool.query(
+    `SELECT MAX(cash_memo_no) AS maxNo FROM cash_memo_${FY}`
+  );
+  const lastNo = maxRows[0]?.maxNo || 0;
+  await pool.query(
+    `INSERT INTO cash_memo_sequence_${FY} (id, last_no) VALUES (1, ?)`,
+    [lastNo]
+  );
+}
+
+  // ---- Suggestion & Utility Tables (as you had) ----
+
   await pool.query(`CREATE TABLE IF NOT EXISTS cities (
     id   INT PRIMARY KEY AUTO_INCREMENT,
     name VARCHAR(100) NOT NULL UNIQUE
-  )`);
+  ) ENGINE=InnoDB`);
+
   await pool.query(`CREATE TABLE IF NOT EXISTS consignors (
     id   INT PRIMARY KEY AUTO_INCREMENT,
     name VARCHAR(100) NOT NULL UNIQUE
-  )`);
+  ) ENGINE=InnoDB`);
+
   await pool.query(`CREATE TABLE IF NOT EXISTS consignees (
     id   INT PRIMARY KEY AUTO_INCREMENT,
     name VARCHAR(100) NOT NULL UNIQUE
-  )`);
+  ) ENGINE=InnoDB`);
+
   await pool.query(`CREATE TABLE IF NOT EXISTS contents (
     id   INT PRIMARY KEY AUTO_INCREMENT,
     name VARCHAR(100) NOT NULL UNIQUE
-  )`);
+  ) ENGINE=InnoDB`);
 
-  await pool.query(`CREATE TABLE IF NOT EXISTS audit_logs (
+  await pool.query(`
+  CREATE TABLE IF NOT EXISTS audit_logs (
     id          INT PRIMARY KEY AUTO_INCREMENT,
     user        VARCHAR(100),
     action      VARCHAR(100) NOT NULL,
     entity      VARCHAR(100) NOT NULL,
-    entity_id   INT NOT NULL,
+    entity_no   VARCHAR(100) NULL,   -- <-- Business number (LR No, Memo No, etc)
+    entity_id   INT NULL,            -- <-- (optional) Internal PK (can be removed if not used)
     year        INT,
+    old_data    LONGTEXT NULL,       -- <-- Before change (JSON)
+    new_data    LONGTEXT NULL,       -- <-- After change (JSON)
     details     TEXT,
     timestamp   DATETIME DEFAULT CURRENT_TIMESTAMP
-  )`);
+  ) ENGINE=InnoDB
+`);
+
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS delivery_persons (
@@ -132,7 +165,7 @@ async function ensureTables(year) {
       name VARCHAR(100) NOT NULL UNIQUE,
       is_active TINYINT DEFAULT 1,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
+    ) ENGINE=InnoDB
   `);
 
   await pool.query(`
@@ -141,10 +174,9 @@ async function ensureTables(year) {
       username VARCHAR(100) UNIQUE NOT NULL,
       password_hash VARCHAR(255) NOT NULL,
       role VARCHAR(50) DEFAULT 'user'
-    )
+    ) ENGINE=InnoDB
   `);
 
-  // App-wide keys table for delete key and other security keys in the future
   await pool.query(`
     CREATE TABLE IF NOT EXISTS app_keys (
       id INT PRIMARY KEY AUTO_INCREMENT,
@@ -154,7 +186,7 @@ async function ensureTables(year) {
       usage_count INT NOT NULL DEFAULT 0,
       updated_by VARCHAR(100),
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-    )
+    ) ENGINE=InnoDB
   `);
 
   await pool.end();

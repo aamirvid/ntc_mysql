@@ -36,6 +36,18 @@ const actionIcons = [
     to: "/deliveries",
     color: "icon-bg-orange",
   },
+  {
+    icon: <ListAltIcon />,
+    label: "LR List",
+    to: "/lrlist",
+    color: "icon-bg-purple",
+  },
+  {
+    icon: <ListAltIcon />,
+    label: "CashMemo List",
+    to: "/cashmemolist",
+    color: "icon-bg-purple",
+  },
 ];
 
 const reportIcons = [

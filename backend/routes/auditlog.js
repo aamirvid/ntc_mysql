@@ -18,15 +18,37 @@ const pool = mysql.createPool({
 
 router.get('/', authenticateToken, requireRole(['admin']), async (req, res) => {
   const year = parseInt(req.query.year);
+  const page = parseInt(req.query.page) || 1;
+  const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 50, 200)); // 1–200 rows per page (to avoid abuse)
+  const offset = (page - 1) * limit;
+
+  if (!year) {
+    return res.status(400).json({ error: "Year is required" });
+  }
+
   try {
-    const [rows] = await pool.query(
-      `SELECT * FROM audit_logs WHERE year = ? ORDER BY id DESC LIMIT 1000`,
-      [year]
+    // Get total count for pagination UI
+    const [[{ total }]] = await pool.query(
+      `SELECT COUNT(*) as total FROM audit_logs WHERE year = ?`, [year]
     );
-    res.json(rows);
+
+    // Get the paginated records
+    const [rows] = await pool.query(
+      `SELECT * FROM audit_logs WHERE year = ? ORDER BY id DESC LIMIT ? OFFSET ?`,
+      [year, limit, offset]
+    );
+
+    res.json({
+      total,
+      page,
+      limit,
+      results: rows,
+      totalPages: Math.ceil(total / limit)
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 module.exports = router;

@@ -53,6 +53,40 @@ router.get('/', async (req, res) => {
   }
 });
 
+// GET paginated, searchable cash memos
+router.get('/list', authenticateToken, requireRole(['admin', 'clerk', 'low']), async (req, res) => {
+  const FY = req.finYear;
+  const { search = "", page = 1, pageSize = 20 } = req.query;
+  const offset = (parseInt(page) - 1) * parseInt(pageSize);
+
+  let where = "1=1";
+  let params = [];
+  if (search && search.trim() !== "") {
+    where += " AND cash_memo_no LIKE ?";
+    params.push(`%${search.trim()}%`);
+  }
+
+  try {
+    // Get total count for pagination
+    const [countRows] = await pool.query(
+      `SELECT COUNT(*) AS total FROM cash_memo_${FY} WHERE ${where}`,
+      params
+    );
+    const total = countRows[0]?.total || 0;
+
+    // Fetch paginated rows
+    const [rows] = await pool.query(
+      `SELECT * FROM cash_memo_${FY} WHERE ${where} ORDER BY id DESC LIMIT ? OFFSET ?`,
+      [...params, parseInt(pageSize), offset]
+    );
+
+    res.json({ data: rows, total });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
 // GET cash memo by id
 router.get('/:id', async (req, res) => {
   const FY = req.finYear;
@@ -83,6 +117,18 @@ router.get('/by-lr-id/:lr_id', authenticateToken, requireRole(['admin', 'clerk',
   }
 });
 
+// Helper to get the next available cash memo number (atomic & safe)
+async function getNextCashMemoNo(FY) {
+  // Use a single UPDATE to increment and get the new value (atomic)
+  await pool.query(`
+    UPDATE cash_memo_sequence_${FY} SET last_no = last_no + 1 WHERE id=1
+  `);
+  const [rows] = await pool.query(
+    `SELECT last_no FROM cash_memo_sequence_${FY} WHERE id=1`
+  );
+  return rows[0].last_no;
+}
+
 // POST create cash memo
 router.post('/', authenticateToken, requireRole(['admin', 'clerk']), async (req, res) => {
   const FY = req.finYear;
@@ -106,10 +152,7 @@ router.post('/', authenticateToken, requireRole(['admin', 'clerk']), async (req,
       return res.status(400).json({ error: "LR not found for this cash memo." });
     }
     const { freight, freight_type } = lrRows[0];
-    const [maxNoRows] = await pool.query(
-      `SELECT MAX(cash_memo_no) AS maxNo FROM cash_memo_${FY}`
-    );
-    const nextNo = (maxNoRows[0]?.maxNo || 0) + 1;
+    const nextNo = await getNextCashMemoNo(FY);
     const totalFreight = freight_type === "Topay" ? parseFloat(freight) || 0 : 0;
     const cashMemoTotal =
       (parseFloat(hamali) || 0) +
@@ -131,13 +174,17 @@ router.post('/', authenticateToken, requireRole(['admin', 'clerk']), async (req,
       `UPDATE lr_${FY} SET has_cash_memo = 1 WHERE id = ?`,
       [lr_id]
     );
-    logAudit({
+    // Fetch new row for audit
+    const [newRows] = await pool.query(`SELECT * FROM cash_memo_${FY} WHERE id = ?`, [result.insertId]);
+    const newData = newRows[0] || null;
+    await logAudit({
       user: username,
       action: "create",
       entity: "cash_memo",
-      entity_id: result.insertId,
+      entity_no: nextNo,
       year: FY,
-      details: JSON.stringify(req.body)
+      old_data: null,
+      new_data: newData
     });
     res.json({ id: result.insertId, cash_memo_no: nextNo });
   } catch (err) {
@@ -151,15 +198,18 @@ router.put('/:id', authenticateToken, requireRole(['admin', 'clerk']), async (re
   const { hamali, bc, landing, lc } = req.body;
   const username = req.user?.username || "system";
   try {
-    // Get lr_id from cash_memo
-    const [rowArr] = await pool.query(
-      `SELECT lr_id FROM cash_memo_${FY} WHERE id = ?`,
+    // Get old row for audit
+    const [oldRows] = await pool.query(
+      `SELECT * FROM cash_memo_${FY} WHERE id = ?`,
       [req.params.id]
     );
-    if (!rowArr[0]) {
+    if (!oldRows[0]) {
       return res.status(400).json({ error: "Cash memo not found" });
     }
-    const lr_id = rowArr[0].lr_id;
+    const oldData = oldRows[0];
+    const cashMemoNo = oldData.cash_memo_no;
+    const lr_id = oldData.lr_id;
+    // Get LR's freight info for total
     const [lrRows] = await pool.query(
       `SELECT freight, freight_type FROM lr_${FY} WHERE id = ?`,
       [lr_id]
@@ -182,13 +232,17 @@ router.put('/:id', authenticateToken, requireRole(['admin', 'clerk']), async (re
         WHERE id=?`,
       [hamali, bc, landing, lc, cashMemoTotal, username, req.params.id]
     );
-    logAudit({
+    // Fetch new row for audit
+    const [newRows] = await pool.query(`SELECT * FROM cash_memo_${FY} WHERE id = ?`, [req.params.id]);
+    const newData = newRows[0] || null;
+    await logAudit({
       user: username,
       action: "update",
       entity: "cash_memo",
-      entity_id: req.params.id,
+      entity_no: cashMemoNo,
       year: FY,
-      details: JSON.stringify(req.body)
+      old_data: oldData,
+      new_data: newData
     });
     res.json({ updated: updateRes.affectedRows > 0 });
   } catch (err) {
@@ -200,15 +254,17 @@ router.put('/:id', authenticateToken, requireRole(['admin', 'clerk']), async (re
 router.delete('/:id', authenticateToken, requireRole(['admin','clerk']), async (req, res) => {
   const FY = req.finYear;
   try {
-    // First get the lr_id of this cash memo
-    const [rows] = await pool.query(
-      `SELECT lr_id FROM cash_memo_${FY} WHERE id = ?`,
+    // Fetch old row for audit
+    const [oldRows] = await pool.query(
+      `SELECT * FROM cash_memo_${FY} WHERE id = ?`,
       [req.params.id]
     );
-    if (!rows[0]) {
+    if (!oldRows[0]) {
       return res.status(404).json({ error: "Cash memo not found" });
     }
-    const lrId = rows[0].lr_id;
+    const oldData = oldRows[0];
+    const cashMemoNo = oldData.cash_memo_no;
+    const lrId = oldData.lr_id;
     // Delete the cash memo
     const [delRes] = await pool.query(
       `DELETE FROM cash_memo_${FY} WHERE id = ?`,
@@ -219,12 +275,14 @@ router.delete('/:id', authenticateToken, requireRole(['admin','clerk']), async (
       `UPDATE lr_${FY} SET has_cash_memo = 0 WHERE id = ?`,
       [lrId]
     );
-    logAudit({
+    await logAudit({
       user: req.user?.username || "system",
       action: "delete",
       entity: "cash_memo",
-      entity_id: req.params.id,
-      year: FY
+      entity_no: cashMemoNo,
+      year: FY,
+      old_data: oldData,
+      new_data: null
     });
     res.json({ deleted: delRes.affectedRows > 0 });
   } catch (err) {

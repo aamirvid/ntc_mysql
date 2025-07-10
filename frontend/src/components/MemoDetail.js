@@ -17,10 +17,10 @@ import {
 } from "@mui/material";
 import api from "../api";
 import { toast } from "react-toastify";
-import DeleteKeyDialog from "./DeleteKeyDialog"; // <-- NEW
+import DeleteKeyDialog from "./DeleteKeyDialog"; 
 import "./EntryGlass.css";
 import { formatDateIndian } from "../utils/formatDate";
-import { getUserRole } from "../auth"; // <-- Needed for role check
+import { getUserRole } from "../auth";
 
 export default function MemoDetail({ selectedYear, currentUser }) {
   const { id } = useParams();

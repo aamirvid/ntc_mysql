@@ -13,24 +13,36 @@ const pool = mysql.createPool({
 });
 
 /**
- * Log an audit event.
+ * Log an audit event, supporting full before/after JSON (and backwards compatible)
  * @param {Object} log
  * @param {string} log.user - Username
- * @param {string} log.action - Action type (create, update, delete)
+ * @param {string} log.action - Action type (create, update, delete, etc)
  * @param {string} log.entity - Table/entity name (lr, memo, cash_memo, etc)
- * @param {number} log.entity_id - Entity's id
- * @param {number} log.year - Financial year
- * @param {string} [log.details] - Optional JSON/details string
+ * @param {string|number} log.entity_no - Business number (LR No, Memo No, etc)
+ * @param {number|string} log.year - Financial year
+ * @param {Object|null} [log.old_data] - Previous data (object, will be stringified)
+ * @param {Object|null} [log.new_data] - New data (object, will be stringified)
+ * @param {string} [log.details] - Optional legacy details field
  */
-async function logAudit({ user, action, entity, entity_id, year, details = "" }) {
+async function logAudit({ user, action, entity, entity_no, year, old_data = null, new_data = null, details = "" }) {
   try {
     await pool.query(
-      `INSERT INTO audit_logs (user, action, entity, entity_id, year, details) VALUES (?, ?, ?, ?, ?, ?)`,
-      [user, action, entity, entity_id, year, details]
+      `INSERT INTO audit_logs
+        (user, action, entity, entity_no, year, old_data, new_data, details, timestamp)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+      [
+        user,
+        action,
+        entity,
+        entity_no,
+        year,
+        old_data ? JSON.stringify(old_data) : null,
+        new_data ? JSON.stringify(new_data) : null,
+        details || ""
+      ]
     );
   } catch (err) {
     console.error("Audit log error:", err);
   }
 }
-
 module.exports = { logAudit };

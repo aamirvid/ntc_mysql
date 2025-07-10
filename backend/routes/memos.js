@@ -185,20 +185,24 @@ router.post('/', authenticateToken, requireRole(['admin', 'clerk']), async (req,
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
       [memo_no, memo_date, arrival_date, arrival_time, truck_no, total_lorry_hire, advance_lorry_hire, driver_owner, username, username]
     );
-    logAudit({
+    // Fetch the full row after insert for audit
+    const [newRows] = await pool.query(`SELECT * FROM memo_${FY} WHERE id = ?`, [result.insertId]);
+    const newData = newRows[0] || null;
+    await logAudit({
       user: username,
       action: 'create',
       entity: 'memo',
-      entity_id: result.insertId,
+      entity_no: memo_no,
       year: FY,
-      details: JSON.stringify(req.body)
+      old_data: null,
+      new_data: newData
     });
-    const [memo] = await pool.query(`SELECT * FROM memo_${FY} WHERE id = ?`, [result.insertId]);
-    res.json(memo[0]);
+    res.json(newData);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 // ---------- UPDATE MEMO ----------
 router.put('/:id', authenticateToken, requireRole(['admin', 'clerk']), async (req, res) => {
@@ -209,22 +213,29 @@ router.put('/:id', authenticateToken, requireRole(['admin', 'clerk']), async (re
   } = req.body;
   const username = req.user?.username || 'system';
   try {
+    // Fetch old row for audit
+    const [oldRows] = await pool.query(`SELECT * FROM memo_${FY} WHERE id = ?`, [req.params.id]);
+    if (!oldRows[0]) return res.status(404).json({ error: 'Memo not found' });
+    const oldData = oldRows[0];
     await pool.query(
       `UPDATE memo_${FY} SET 
         memo_no=?, memo_date=?, arrival_date=?, arrival_time=?, truck_no=?, total_lorry_hire=?, advance_lorry_hire=?, driver_owner=?, updated_by=?, updated_at=NOW()
         WHERE id=?`,
       [memo_no, memo_date, arrival_date, arrival_time, truck_no, total_lorry_hire, advance_lorry_hire, driver_owner, username, req.params.id]
     );
-    logAudit({
+    // Fetch new row for audit
+    const [newRows] = await pool.query(`SELECT * FROM memo_${FY} WHERE id = ?`, [req.params.id]);
+    const newData = newRows[0] || null;
+    await logAudit({
       user: username,
       action: 'update',
       entity: 'memo',
-      entity_id: req.params.id,
+      entity_no: memo_no,
       year: FY,
-      details: JSON.stringify(req.body)
+      old_data: oldData,
+      new_data: newData
     });
-    const [memo] = await pool.query(`SELECT * FROM memo_${FY} WHERE id = ?`, [req.params.id]);
-    res.json(memo[0]);
+    res.json(newData);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -234,8 +245,11 @@ router.put('/:id', authenticateToken, requireRole(['admin', 'clerk']), async (re
 router.delete('/:id', authenticateToken, requireRole(['admin']), async (req, res) => {
   const FY = req.finYear;
   try {
+    // Fetch old memo for audit
     const [memoRows] = await pool.query(`SELECT * FROM memo_${FY} WHERE id = ?`, [req.params.id]);
     if (!memoRows[0]) return res.status(404).json({ error: 'Memo not found' });
+    const oldData = memoRows[0];
+    const memoNo = oldData.memo_no;
 
     // Get all LRs under this memo
     const [lrs] = await pool.query(`SELECT id FROM lr_${FY} WHERE memo_id = ?`, [req.params.id]);
@@ -247,21 +261,22 @@ router.delete('/:id', authenticateToken, requireRole(['admin']), async (req, res
         lrIds
       );
     }
-
     await pool.query(`DELETE FROM lr_${FY} WHERE memo_id = ?`, [req.params.id]);
     const [delRes] = await pool.query(`DELETE FROM memo_${FY} WHERE id = ?`, [req.params.id]);
-    logAudit({
+    await logAudit({
       user: req.user?.username || 'system',
       action: 'delete',
       entity: 'memo',
-      entity_id: req.params.id,
+      entity_no: memoNo,
       year: FY,
-      details: `Memo ${memoRows[0].memo_no} deleted with all LRs and cash memos`
+      old_data: oldData,
+      new_data: null
     });
     res.json({ deleted: delRes.affectedRows > 0 });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 module.exports = router;

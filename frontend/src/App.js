@@ -13,6 +13,8 @@ import MemoEdit from "./components/MemoEdit";
 import LrEdit from "./components/LrEdit";
 import DeliveryPersonManager from "./components/DeliveryPersonManager";
 import DeliveryMarking from "./components/DeliveryMarking";
+import CashMemoList from "./components/CashMemoList";
+import LrList from "./components/LrList";
 import Login from "./components/Login";
 import UserAdmin from "./components/UserAdmin";
 import ProtectedRoute from "./components/ProtectedRoute";
@@ -29,7 +31,8 @@ import RefundReport from "./components/reports/RefundReport";
 import LrsWithoutCashMemoReport from "./components/reports/LrsWithoutCashMemoReport";
 import DeliveryReport from "./components/reports/DeliveryReport";
 import DeleteKeySettings from "./components/settings/DeleteKeySettings";
-import api from "./api"; // <-- import your Axios instance
+import api from "./api"; 
+
 
 export default function App() {
   // Keep selected year even after refresh using localStorage
@@ -162,12 +165,29 @@ export default function App() {
               </ProtectedRoute>
             }
           />
-
+          
           <Route
             path="/deliveries"
             element={
               <ProtectedRoute allowedRoles={["admin", "clerk"]}>
                 <DeliveryMarking selectedYear={selectedYear} />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/lrlist"
+            element={
+              <ProtectedRoute allowedRoles={["admin", "clerk"]}>
+                <LrList selectedYear={selectedYear} />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/cashmemolist"
+            element={
+              <ProtectedRoute allowedRoles={["admin", "clerk"]}>
+                <CashMemoList selectedYear={selectedYear} />
               </ProtectedRoute>
             }
           />

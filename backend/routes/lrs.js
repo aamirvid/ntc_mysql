@@ -72,7 +72,8 @@ router.get('/search', authenticateToken, requireRole(['admin', 'clerk', 'low']),
   try {
     const {
       lr_no, consignor, consignee, year, page = 1, limit = 20,
-      memo_from_date, memo_to_date, arrival_from_date, arrival_to_date, lr_from_date, lr_to_date
+      memo_from_date, memo_to_date, arrival_from_date, arrival_to_date, lr_from_date, lr_to_date,
+      status, sortField, sortOrder
     } = req.query;
     if (!year) return res.status(400).json({ error: "Year is required" });
 
@@ -87,7 +88,7 @@ router.get('/search', authenticateToken, requireRole(['admin', 'clerk', 'low']),
     if (consignee) { where.push(`lr.consignee LIKE ?`); params.push(`%${consignee}%`); }
     if (lr_from_date) { where.push(`DATE(lr.lr_date) >= DATE(?)`); params.push(lr_from_date); }
     if (lr_to_date) { where.push(`DATE(lr.lr_date) <= DATE(?)`); params.push(lr_to_date); }
-    if (req.query.status) { where.push(`lr.status = ?`); params.push(req.query.status); }
+    if (status) { where.push(`lr.status = ?`); params.push(status); }
     if (memo_from_date) { where.push(`DATE(memo.memo_date) >= DATE(?)`); params.push(memo_from_date); }
     if (memo_to_date) { where.push(`DATE(memo.memo_date) <= DATE(?)`); params.push(memo_to_date); }
     if (arrival_from_date) { where.push(`DATE(memo.arrival_date) >= DATE(?)`); params.push(arrival_from_date); }
@@ -96,28 +97,59 @@ router.get('/search', authenticateToken, requireRole(['admin', 'clerk', 'low']),
     let whereSql = where.length ? "WHERE " + where.join(" AND ") : "";
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
+    // --- Allowed sort fields: all fields selected below (except IDs) ---
+    const allowedSortFields = [
+      // LR fields
+      "memo_id", "lr_no", "lr_date", "from_city", "to_city", "consignor", "consignee", "pkgs", "content",
+      "freight_type", "freight", "weight", "dd_rate", "dd_total", "pm_no", "refund", "remarks",
+      "status", "has_cash_memo", "delivered_by", "delivered_at", "created_by", "created_at", "updated_by", "updated_at",
+      // Memo fields
+      "memo_no", "memo_date", "arrival_date", "truck_no", "driver_owner",
+      // Cash Memo fields
+      "cash_memo_no", "hamali", "bc", "landing", "lc", "cash_memo_total"
+    ];
+    // Map "virtual" fields to SQL alias
+    const fieldAlias = {
+      "memo_no": "memo.memo_no",
+      "memo_date": "memo.memo_date",
+      "arrival_date": "memo.arrival_date",
+      "truck_no": "memo.truck_no",
+      "driver_owner": "memo.driver_owner",
+      "cash_memo_no": "cash.cash_memo_no",
+      "hamali": "cash.hamali",
+      "bc": "cash.bc",
+      "landing": "cash.landing",
+      "lc": "cash.lc",
+      "cash_memo_total": "cash.cash_memo_total",
+      // Others default to lr.table_field
+    };
+    let sortCol = "lr.lr_date";
+    if (allowedSortFields.includes(sortField)) {
+      sortCol = fieldAlias[sortField] || `lr.${sortField}`;
+    }
+    const orderDir = (sortOrder && sortOrder.toUpperCase() === "ASC") ? "ASC" : "DESC";
+    const orderBySql = `ORDER BY ${sortCol} ${orderDir}`;
+
+    // --- Expanded SELECT ---
     const selectSql = `
       SELECT 
-        lr.*, 
+        -- LR fields 
+        lr.id AS id,
+        lr.memo_id, lr.lr_no, lr.lr_date, lr.from_city, lr.to_city, lr.consignor, lr.consignee, lr.pkgs, lr.content,
+        lr.freight_type, lr.freight, lr.weight, lr.dd_rate, lr.dd_total, lr.pm_no, lr.refund, lr.remarks,
+        lr.status, lr.has_cash_memo, lr.delivered_by, lr.delivered_at, lr.created_by, lr.created_at, lr.updated_by, lr.updated_at,
+        -- Memo fields
         memo.memo_no, memo.memo_date, memo.arrival_date, memo.truck_no, memo.driver_owner,
+        -- Cash Memo fields
         cash.cash_memo_no, cash.hamali, cash.bc, cash.landing, cash.lc, cash.cash_memo_total
       FROM ${lrTable} lr
       LEFT JOIN ${memoTable} memo ON lr.memo_id = memo.id
       LEFT JOIN ${cashMemoTable} cash ON lr.id = cash.lr_id
       ${whereSql}
-      ORDER BY lr.lr_date DESC
+      ${orderBySql}
       LIMIT ? OFFSET ?
     `;
     const [rows] = await pool.query(selectSql, [...params, parseInt(limit), offset]);
-    rows.forEach(row => {
-      const trueFreight = (row.freight_type === "Topay" ? parseFloat(row.freight) || 0 : 0);
-      row.true_cash_memo_total =
-        (parseFloat(row.hamali) || 0) +
-        (parseFloat(row.bc) || 0) +
-        (parseFloat(row.landing) || 0) +
-        (parseFloat(row.lc) || 0) +
-        trueFreight;
-    });
 
     const countSql = `SELECT COUNT(*) as total FROM ${lrTable} lr LEFT JOIN ${memoTable} memo ON lr.memo_id = memo.id ${whereSql}`;
     const [countRow] = await pool.query(countSql, params);
@@ -127,6 +159,7 @@ router.get('/search', authenticateToken, requireRole(['admin', 'clerk', 'low']),
     res.status(500).json({ error: "Search failed" });
   }
 });
+
 
 // LOOKUP by LR No (returns LR and memo number)
 router.get('/lookup/:no', authenticateToken, requireRole(['admin', 'clerk', 'low']), async (req, res) => {
@@ -273,6 +306,17 @@ router.post(
         if (!lr_no) continue;
         if (!lr_date_db) {
           skippedLrNos.push(`${lr_no} (Invalid Date: ${row[3]})`);
+          // Audit log invalid date skip
+          await logAudit({
+            user: req.user.username,
+            action: 'bulk-import-skipped',
+            entity: 'lr',
+            entity_no: lr_no,
+            year: FY,
+            old_data: null,
+            new_data: null,
+            details: `Skipped: Invalid date (${row[3]})`
+          });
           continue;
         }
 
@@ -284,6 +328,17 @@ router.post(
         if (existsRows[0]) {
           duplicates++;
           skippedLrNos.push(`${lr_no} (Duplicate)`);
+          // Audit log duplicate skip
+          await logAudit({
+            user: req.user.username,
+            action: 'bulk-import-skipped',
+            entity: 'lr',
+            entity_no: lr_no,
+            year: FY,
+            old_data: null,
+            new_data: null,
+            details: "Skipped: Duplicate LR No in bulk import"
+          });
           continue;
         }
 
@@ -308,9 +363,33 @@ router.post(
               req.user.username
             ]
           );
+          // Fetch new row for audit
+          const [newRows] = await pool.query(`SELECT * FROM lr_${FY} WHERE lr_no = ?`, [lr_no]);
+          const newData = newRows[0] || null;
+          await logAudit({
+            user: req.user.username,
+            action: 'bulk-import',
+            entity: 'lr',
+            entity_no: lr_no,
+            year: FY,
+            old_data: null,
+            new_data: newData,
+            details: "LR inserted via bulk import"
+          });
           inserted++;
         } catch (err) {
           skippedLrNos.push(`${lr_no} (DB Error: ${err.message})`);
+          // Audit log DB error
+          await logAudit({
+            user: req.user.username,
+            action: 'bulk-import-error',
+            entity: 'lr',
+            entity_no: lr_no,
+            year: FY,
+            old_data: null,
+            new_data: null,
+            details: `DB Error: ${err.message}`
+          });
         }
       }
 
@@ -320,6 +399,7 @@ router.post(
     }
   }
 );
+
 
 // MARK as Delivered (batch or single)
 router.post('/mark-delivered', authenticateToken, requireRole(['admin', 'clerk']), async (req, res) => {
@@ -364,13 +444,17 @@ router.post('/', authenticateToken, requireRole(['admin', 'clerk']), async (req,
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), 'pending', 0)`,
       [memo_id, lr_no, lr_date, from_city, to_city, consignor, consignee, pkgs, content, freight_type, freight, weight, dd_rate, dd_total, pm_no, refund, remarks, username, username]
     );
-    logAudit({
+    // Fetch inserted row for full audit
+    const [newRows] = await pool.query(`SELECT * FROM lr_${FY} WHERE id = ?`, [result.insertId]);
+    const newData = newRows[0] || null;
+    await logAudit({
       user: username,
       action: 'create',
       entity: 'lr',
-      entity_id: result.insertId,
+      entity_no: lr_no,
       year: FY,
-      details: JSON.stringify(req.body)
+      old_data: null,
+      new_data: newData
     });
     res.json({ id: result.insertId });
   } catch (err) {
@@ -378,52 +462,81 @@ router.post('/', authenticateToken, requireRole(['admin', 'clerk']), async (req,
   }
 });
 
-// PUT: Update only the LR (no cash memo logic here)
+// PUT: Update the LR 
 router.put('/:id', authenticateToken, requireRole(['admin', 'clerk']), async (req, res) => {
   const FY = req.finYear;
   const {
     memo_id, lr_no, lr_date, from_city, to_city, consignor, consignee, pkgs,
-    content, freight_type, freight, weight, dd_rate, dd_total, pm_no, refund, remarks,
-    status, delivered_by, delivered_at
+    content, freight_type, freight, weight, dd_rate, dd_total, pm_no, refund, remarks
+    // EXCLUDE status, delivered_by, delivered_at!
   } = req.body;
   const username = req.user?.username || 'system';
+
   try {
+    // Fetch old row for audit
+    const [oldRows] = await pool.query(`SELECT * FROM lr_${FY} WHERE id = ?`, [req.params.id]);
+    const oldData = oldRows[0] || null;
+
+    // Only update fields allowed to be changed by the user:
     const [result] = await pool.query(
       `UPDATE lr_${FY} SET 
-        memo_id=?, lr_no=?, lr_date=?, from_city=?, to_city=?, consignor=?, consignee=?, pkgs=?, content=?, freight_type=?, freight=?, weight=?, dd_rate=?, dd_total=?, pm_no=?, refund=?, remarks=?, updated_by=?, updated_at=NOW(), status=?, delivered_by=?, delivered_at=?
-        WHERE id=?`,
-      [memo_id, lr_no, lr_date, from_city, to_city, consignor, consignee, pkgs, content, freight_type, freight, weight, dd_rate, dd_total, pm_no, refund, remarks, username, status, delivered_by, delivered_at, req.params.id]
+        memo_id=?, lr_no=?, lr_date=?, from_city=?, to_city=?, consignor=?, consignee=?, pkgs=?, content=?, 
+        freight_type=?, freight=?, weight=?, dd_rate=?, dd_total=?, pm_no=?, refund=?, remarks=?, 
+        updated_by=?, updated_at=NOW()
+       WHERE id=?`,
+      [
+        memo_id, lr_no, lr_date, from_city, to_city, consignor, consignee, pkgs, content,
+        freight_type, freight, weight, dd_rate, dd_total, pm_no, refund, remarks,
+        username, req.params.id
+      ]
     );
-    logAudit({
+
+    // Fetch new row for audit
+    const [newRows] = await pool.query(`SELECT * FROM lr_${FY} WHERE id = ?`, [req.params.id]);
+    const newData = newRows[0] || null;
+    const lrNo = (oldData && oldData.lr_no) ? oldData.lr_no : (newData ? newData.lr_no : null);
+
+    await logAudit({
       user: username,
       action: 'update',
       entity: 'lr',
-      entity_id: req.params.id,
+      entity_no: lrNo,
       year: FY,
-      details: JSON.stringify(req.body)
+      old_data: oldData,
+      new_data: newData
     });
+
     res.json({ updated: result.affectedRows > 0 });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
+
 // DELETE: Delete LR AND its cash memo
 router.delete('/:id', authenticateToken, requireRole(['admin','clerk']), async (req, res) => {
   const FY = req.finYear;
   try {
+    // Fetch LR row for audit
+    const [oldRows] = await pool.query(`SELECT * FROM lr_${FY} WHERE id = ?`, [req.params.id]);
+    const oldData = oldRows[0] || null;
+    const lrNo = oldData ? oldData.lr_no : null;
+
     // First, delete the cash memo (child)
     await pool.query(`DELETE FROM cash_memo_${FY} WHERE lr_id = ?`, [req.params.id]);
     // Then delete the LR (parent)
     const [result] = await pool.query(`DELETE FROM lr_${FY} WHERE id = ?`, [req.params.id]);
-    logAudit({
+
+    await logAudit({
       user: req.user.username,
       action: 'delete',
       entity: 'lr',
-      entity_id: req.params.id,
+      entity_no: lrNo,
       year: FY,
-      details: ''
+      old_data: oldData,
+      new_data: null
     });
+
     res.json({ deleted: result.affectedRows > 0 });
   } catch (err) {
     res.status(500).json({ error: err.message });
